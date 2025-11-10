@@ -10,7 +10,7 @@ Camera space
 preview = False
 
 # 0.2066749994
-CAMERA_HEIGHT_M = 0.206675  # camera height above ground (meters)
+CAMERA_HEIGHT_M = 0.2066749994  # camera height above ground (meters)
 CAMERA_PITCH_DEG = 0  # camera downward pitch (+ degrees)
 CAMERA_X_M = 0.0  # camera X offset in robot frame (forward)
 CAMERA_Y_M = CAMERA_HEIGHT_M  # camera Y in world (up) if using Y-up
@@ -31,21 +31,23 @@ K_BASE = np.array(
 SCALE_INTRINSICS = True  # scale intrinsics to current frame size
 
 # HSV threshold [H,S,V] in percent or H half-range
-LOWER_HSV_PERCENT = np.array([64, 40, 35]) if not preview else np.array([60, 50, 40])
-UPPER_HSV_PERCENT = np.array([85, 98, 90]) if not preview else np.array([70, 70, 90])
+LOWER_HSV = np.array([64, 40, 35]) if not preview else np.array([60, 50, 40])
+UPPER_HSV = np.array([85, 98, 90]) if not preview else np.array([70, 70, 90])
 
 # Contour size threshold
-MIN_TARGET_WIDTH_PX = 8
-MIN_TARGET_HEIGHT_PX = 8
-MAX_TARGET_WIDTH_PX = 300
-MAX_TARGET_HEIGHT_PX = 300
+MIN_WIDTH = 8
+MIN_HEIGHT = 8
+MAX_WIDTH = 300
+MAX_HEIGHT = 300
 
 
+# Rotation matrix for pitch
 def _rotation_x(pitch_rad: float) -> np.ndarray:
     c, s = np.cos(pitch_rad), np.sin(pitch_rad)
     return np.array([[1, 0, 0], [0, c, -s], [0, s, c]], dtype=np.float32)
 
 
+# Scale intrinsics matrix K to frame size
 def scale_intrinsics(
     K: np.ndarray, frame_w: int, frame_h: int, calib_w: int, calib_h: int
 ) -> np.ndarray:
@@ -63,20 +65,8 @@ def scale_intrinsics(
 # runPipeline() is called every frame by Limelight
 def runPipeline(image, llrobot):
     # Convert HSV percentage thresholds to HSV ranges
-    lower_target = np.array(
-        [
-            int(LOWER_HSV_PERCENT[0] / 2),
-            int(LOWER_HSV_PERCENT[1] * 2.55),
-            int(LOWER_HSV_PERCENT[2] * 2.55),
-        ]
-    )
-    upper_target = np.array(
-        [
-            int(UPPER_HSV_PERCENT[0] / 2),
-            int(UPPER_HSV_PERCENT[1] * 2.55),
-            int(UPPER_HSV_PERCENT[2] * 2.55),
-        ]
-    )
+    lower_target = np.array([int(LOWER_HSV[0] / 2), int(LOWER_HSV[1] * 2.55), int(LOWER_HSV[2] * 2.55)])
+    upper_target = np.array([int(UPPER_HSV[0] / 2), int(UPPER_HSV[1] * 2.55), int(UPPER_HSV[2] * 2.55)])
     img_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     img_threshold = cv2.inRange(img_hsv, lower_target, upper_target)
 
@@ -93,10 +83,10 @@ def runPipeline(image, llrobot):
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
             if (
-                w > MIN_TARGET_WIDTH_PX
-                and h > MIN_TARGET_HEIGHT_PX
-                and w < MAX_TARGET_WIDTH_PX
-                and h < MAX_TARGET_HEIGHT_PX
+                w > MIN_WIDTH
+                and h > MIN_HEIGHT
+                and w < MAX_WIDTH
+                and h < MAX_HEIGHT
             ):
                 valid_contours.append(contour)
 
@@ -132,13 +122,12 @@ def runPipeline(image, llrobot):
             # Camera frame: X right, Y down, Z forward
             pixel = np.array([[float(u)], [float(v)], [1.0]], dtype=np.float32)
             Kinv = np.linalg.inv(K)
-            ray_camera = Kinv @ pixel  # direction in camera frame (unnormalized)
+            ray_camera = Kinv @ pixel  # direction in camera frame
 
             # Apply camera pitch rotation (positive pitch = looking down)
             R = _rotation_x(np.deg2rad(CAMERA_PITCH_DEG))
             ray_camera = R @ ray_camera
 
-            # In standard camera frame: X=right, Y=down, Z=forward
             # For ground plane intersection, we need Y component (down direction)
             dx = float(ray_camera[0, 0])
             dy = float(ray_camera[1, 0])  # positive Y is down in camera frame
@@ -158,17 +147,15 @@ def runPipeline(image, llrobot):
                     X_m = CAMERA_X_M + dx * t  # Right in camera → Side in world
                     Z_m = CAMERA_Z_M + dz * t
 
-                    # Pack results: [hasTarget, u, v, X_m, Z_m, w, h, area]
+                    # [hasTarget, u, v, X_m, Z_m, w, h, area]
                     llpython = [1, int(u), int(v), X_m, Z_m, int(w), int(h), area]
-                    print(
-                        f"Found intersection at World: (X={X_m:.2f}m, Z={Z_m:.2f}m), Pixel: ({u}, {v}), size: ({w}x{h}), area: {area:.1f}"
-                    )
+                    print(f"Found intersection at World: (X={X_m:.2f}m, Z={Z_m:.2f}m), Pixel: ({u}, {v}), size: ({w}x{h}), area: {area:.1f}")
                 else:
-                    print(f"Negative t={t:.3f}, no valid intersection")
+                    print(f"Negative t={t:.2f}, no valid intersection")
                     llpython = [0, 0, 0, 0, 0, 0, 0, 0]
             else:
                 # Ray parallel to ground or pointing upward
-                print(f"Ray not pointing down (dy={dy:.3f}), no ground intersection")
+                print(f"Ray not pointing down (dy={dy:.2f}), no ground intersection")
                 llpython = [0, 0, 0, 0, 0, 0, 0, 0]
 
     return largestContour, image, llpython
